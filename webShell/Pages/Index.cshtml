@@ -1,0 +1,109 @@
+﻿@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Shell 控制台";
+}
+
+<div class="shell-page">
+    @Html.AntiForgeryToken()
+    <div class="toolbar">
+        <h1>Shell 控制台</h1>
+        <form method="post" action="/Login?handler=Logout">
+            @Html.AntiForgeryToken()
+            <button type="submit">退出登录</button>
+        </form>
+    </div>
+    <div id="commands" class="commands"></div>
+    <h2>任务</h2>
+    <div id="tasks"></div>
+</div>
+
+@section Scripts {
+<script>
+const commands = document.getElementById('commands');
+const tasks = document.getElementById('tasks');
+const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
+
+async function loadState() {
+    const response = await fetch('/Index?handler=State');
+    if (!response.ok) return;
+    const data = await response.json();
+    renderTasks(data);
+}
+
+async function loadCommands() {
+    const response = await fetch('/Index?handler=Commands');
+    if (!response.ok) return;
+    const data = await response.json();
+    commands.innerHTML = '';
+    for (const command of data.commands) {
+        const button = document.createElement('button');
+        button.textContent = command.error ? `${command.title || command.id}（配置错误）` : command.title;
+        button.disabled = !!command.error;
+        button.onclick = () => startCommand(command.id, button);
+        commands.appendChild(button);
+        if (command.error) {
+            const error = document.createElement('div');
+            error.className = 'config-error';
+            error.textContent = `${command.id}: ${command.error}`;
+            commands.appendChild(error);
+        }
+    }
+    renderTasks(data.tasks);
+}
+
+async function startCommand(id, button) {
+    button.disabled = true;
+    const body = new URLSearchParams({ commandId: id });
+    if (token) body.append('__RequestVerificationToken', token);
+    await fetch('/Index?handler=Start', { method: 'POST', body });
+    await loadState();
+    button.disabled = false;
+}
+
+async function stopTask(id) {
+    const body = new URLSearchParams({ taskId: id });
+    if (token) body.append('__RequestVerificationToken', token);
+    await fetch('/Index?handler=Stop', { method: 'POST', body });
+    await loadState();
+}
+
+function renderTasks(items) {
+    const positions = new Map([...tasks.querySelectorAll('.task')].map(section => {
+        const output = section.querySelector('pre');
+        return [section.dataset.id, {
+            top: output.scrollTop,
+            atBottom: output.scrollTop + output.clientHeight >= output.scrollHeight - 20
+        }];
+    }));
+    tasks.innerHTML = '';
+    for (const item of items) {
+        const section = document.createElement('section');
+        section.className = 'task';
+        section.dataset.id = item.id;
+        const header = document.createElement('div');
+        header.innerHTML = `<strong>${escapeHtml(item.title)}</strong> <span>${escapeHtml(item.status)}</span>`;
+        if (item.status === 'Running') {
+            const stop = document.createElement('button');
+            stop.textContent = '停止';
+            stop.onclick = () => stopTask(item.id);
+            header.appendChild(stop);
+        }
+        const output = document.createElement('pre');
+        output.innerHTML = item.output.map(x => `<span class="${x.isError ? 'error-output' : ''}">${escapeHtml(x.text)}</span>`).join('\n');
+        section.append(header, output);
+        tasks.appendChild(section);
+        const position = positions.get(item.id);
+        if (position?.atBottom) output.scrollTop = output.scrollHeight;
+        else if (position) output.scrollTop = position.top;
+    }
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>'"]/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[x]));
+}
+
+loadCommands();
+setInterval(loadState, 1500);
+</script>
+}

@@ -1,0 +1,17 @@
+@page
+@model webShell.Pages.LoginModel
+@{
+    ViewData["Title"] = "µÇÂ¼";
+}
+<div class="login-page">
+    <form method="post">
+        <h1>Shell ¿ØÖÆÌ¨</h1>
+        <label asp-for="Password">·ÃÎÊÃÜÂë</label>
+        <input asp-for="Password" type="password" autofocus />
+        <button type="submit">µÇÂ¼</button>
+        @if (Model.Error is not null)
+        {
+            <div class="error-output">@Model.Error</div>
+        }
+    </form>
+</div>
