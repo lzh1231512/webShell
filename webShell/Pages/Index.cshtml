@@ -6,101 +6,243 @@
 
 <div class="shell-page">
     @Html.AntiForgeryToken()
-    <div class="toolbar">
-        <h1>Shell 控制台</h1>
-        <form method="post" action="/Login?handler=Logout">
-            @Html.AntiForgeryToken()
-            <button type="submit">退出登录</button>
-        </form>
-    </div>
-    <div id="commands" class="commands"></div>
-    <h2>任务</h2>
-    <div id="tasks"></div>
+    <header class="shell-header">
+        <div>
+            <h1>Shell 控制台</h1>
+            <p class="page-subtitle">选择一个命令开始执行</p>
+        </div>
+    </header>
+
+    <main>
+        <section>
+            <h2>命令</h2>
+            <div id="commands" class="command-groups" aria-live="polite"></div>
+        </section>
+
+        <section class="task-section">
+            <div class="section-heading">
+                <h2>任务状态</h2>
+                <span id="running-count" class="running-count"></span>
+            </div>
+            <div id="tasks" class="task-list" aria-live="polite"></div>
+        </section>
+    </main>
 </div>
+
+<dialog id="task-dialog" class="task-dialog">
+    <div class="dialog-header">
+        <div>
+            <h2 id="dialog-title">任务输出</h2>
+            <span id="dialog-status" class="status-badge"></span>
+        </div>
+        <button id="dialog-close" class="icon-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <pre id="dialog-output" class="dialog-output"></pre>
+    <div class="dialog-actions">
+        <button id="dialog-stop" class="danger-button" type="button">停止任务</button>
+    </div>
+</dialog>
 
 @section Scripts {
 <script>
-const commands = document.getElementById('commands');
-const tasks = document.getElementById('tasks');
+const endpoints = {
+    commands: '@Url.Page("/Index", pageHandler: "Commands")',
+    state: '@Url.Page("/Index", pageHandler: "State")',
+    start: '@Url.Page("/Index", pageHandler: "Start")',
+    stop: '@Url.Page("/Index", pageHandler: "Stop")'
+};
+const commandsElement = document.getElementById('commands');
+const tasksElement = document.getElementById('tasks');
+const runningCountElement = document.getElementById('running-count');
+const dialog = document.getElementById('task-dialog');
+const dialogTitle = document.getElementById('dialog-title');
+const dialogStatus = document.getElementById('dialog-status');
+const dialogOutput = document.getElementById('dialog-output');
+const dialogStop = document.getElementById('dialog-stop');
 const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
-
-async function loadState() {
-    const response = await fetch('/Index?handler=State');
-    if (!response.ok) return;
-    const data = await response.json();
-    renderTasks(data);
-}
+let currentCommands = [];
+let currentTasks = [];
+let selectedTaskId = null;
 
 async function loadCommands() {
-    const response = await fetch('/Index?handler=Commands');
+    const response = await fetch(endpoints.commands, { credentials: 'same-origin' });
     if (!response.ok) return;
     const data = await response.json();
-    commands.innerHTML = '';
-    for (const command of data.commands) {
-        const button = document.createElement('button');
-        button.textContent = command.error ? `${command.title || command.id}（配置错误）` : command.title;
-        button.disabled = !!command.error;
-        button.onclick = () => startCommand(command.id, button);
-        commands.appendChild(button);
-        if (command.error) {
-            const error = document.createElement('div');
-            error.className = 'config-error';
-            error.textContent = `${command.id}: ${command.error}`;
-            commands.appendChild(error);
-        }
-    }
+    currentCommands = data.commands;
+    renderCommands();
     renderTasks(data.tasks);
 }
 
-async function startCommand(id, button) {
+async function loadState() {
+    const response = await fetch(endpoints.state, { credentials: 'same-origin' });
+    if (!response.ok) return;
+    renderTasks(await response.json());
+}
+
+function renderCommands() {
+    const groups = new Map();
+    for (const command of currentCommands) {
+        if (!groups.has(command.type)) groups.set(command.type, []);
+        groups.get(command.type).push(command);
+    }
+
+    commandsElement.replaceChildren();
+    for (const [type, commands] of groups) {
+        const details = document.createElement('details');
+        details.className = 'command-group';
+        details.open = true;
+        const summary = document.createElement('summary');
+        summary.textContent = type;
+        details.appendChild(summary);
+
+        const list = document.createElement('div');
+        list.className = 'command-list';
+        for (const command of commands) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'command-item';
+            const button = document.createElement('button');
+            button.className = `command-button command-${type.toLowerCase()}`;
+            button.textContent = command.error ? `${command.title}（配置错误）` : command.title;
+            button.disabled = !!command.error;
+            if (command.error) {
+                const error = document.createElement('div');
+                error.className = 'config-error';
+                error.textContent = command.error;
+                wrapper.append(button, error);
+            } else {
+                button.onclick = () => runCommand(command, button);
+                wrapper.appendChild(button);
+            }
+            list.appendChild(wrapper);
+        }
+        details.appendChild(list);
+        commandsElement.appendChild(details);
+    }
+}
+
+async function runCommand(command, button) {
+    if (command.type === 'URL') {
+        window.open(command.script.trim(), '_blank', 'noopener,noreferrer');
+        return;
+    }
+
+    if (command.type === 'JavaScript') {
+        try {
+            Function(`"use strict";\n${command.script}`)();
+        } catch (error) {
+            showMessage('JavaScript 执行失败', error?.stack || error?.message || String(error));
+        }
+        return;
+    }
+
     button.disabled = true;
-    const body = new URLSearchParams({ commandId: id });
-    if (token) body.append('__RequestVerificationToken', token);
-    await fetch('/Index?handler=Start', { method: 'POST', body });
-    await loadState();
-    button.disabled = false;
+    try {
+        const body = new URLSearchParams({ commandId: command.id });
+        if (token) body.append('__RequestVerificationToken', token);
+        const response = await fetch(endpoints.start, { method: 'POST', body, credentials: 'same-origin' });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: '启动命令失败。' }));
+            showMessage('启动失败', error.error || '启动命令失败。');
+            return;
+        }
+        const task = await response.json();
+        renderTasks([task, ...currentTasks.filter(x => x.id !== task.id)]);
+        openTask(task);
+    } finally {
+        button.disabled = false;
+    }
 }
 
 async function stopTask(id) {
     const body = new URLSearchParams({ taskId: id });
     if (token) body.append('__RequestVerificationToken', token);
-    await fetch('/Index?handler=Stop', { method: 'POST', body });
+    await fetch(endpoints.stop, { method: 'POST', body, credentials: 'same-origin' });
     await loadState();
 }
 
 function renderTasks(items) {
-    const positions = new Map([...tasks.querySelectorAll('.task')].map(section => {
-        const output = section.querySelector('pre');
-        return [section.dataset.id, {
-            top: output.scrollTop,
-            atBottom: output.scrollTop + output.clientHeight >= output.scrollHeight - 20
-        }];
-    }));
-    tasks.innerHTML = '';
+    currentTasks = items;
+    const running = items.filter(x => x.status === 'Running');
+    runningCountElement.textContent = running.length ? `${running.length} 个运行中` : '';
+    tasksElement.replaceChildren();
+
+    if (!items.length) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = '暂无任务';
+        tasksElement.appendChild(empty);
+        return;
+    }
+
     for (const item of items) {
-        const section = document.createElement('section');
-        section.className = 'task';
-        section.dataset.id = item.id;
-        const header = document.createElement('div');
-        header.innerHTML = `<strong>${escapeHtml(item.title)}</strong> <span>${escapeHtml(item.status)}</span>`;
+        const card = document.createElement('article');
+        card.className = 'task-card';
+        const info = document.createElement('div');
+        info.className = 'task-info';
+        info.innerHTML = `<strong>${escapeHtml(item.title)}</strong><span class="status-badge status-${item.status.toLowerCase()}">${statusText(item.status)}</span>`;
+        const actions = document.createElement('div');
+        actions.className = 'task-actions';
+        const view = document.createElement('button');
+        view.className = 'secondary-button';
+        view.textContent = '查看结果';
+        view.onclick = () => openTask(item);
+        actions.appendChild(view);
         if (item.status === 'Running') {
             const stop = document.createElement('button');
+            stop.className = 'danger-button';
             stop.textContent = '停止';
             stop.onclick = () => stopTask(item.id);
-            header.appendChild(stop);
+            actions.appendChild(stop);
         }
-        const output = document.createElement('pre');
-        output.innerHTML = item.output.map(x => `<span class="${x.isError ? 'error-output' : ''}">${escapeHtml(x.text)}</span>`).join('\n');
-        section.append(header, output);
-        tasks.appendChild(section);
-        const position = positions.get(item.id);
-        if (position?.atBottom) output.scrollTop = output.scrollHeight;
-        else if (position) output.scrollTop = position.top;
+        card.append(info, actions);
+        tasksElement.appendChild(card);
+    }
+
+    if (selectedTaskId) {
+        const selected = items.find(x => x.id === selectedTaskId);
+        if (selected) updateDialog(selected);
     }
 }
 
+function openTask(task) {
+    selectedTaskId = task.id;
+    updateDialog(task);
+    if (!dialog.open) dialog.showModal();
+}
+
+function updateDialog(task) {
+    dialogTitle.textContent = task.title;
+    dialogStatus.textContent = statusText(task.status);
+    dialogStatus.className = `status-badge status-${task.status.toLowerCase()}`;
+    dialogOutput.textContent = task.output.map(x => x.text).join('\n');
+    dialogStop.hidden = task.status !== 'Running';
+    dialogStop.onclick = () => stopTask(task.id);
+}
+
+document.getElementById('dialog-close').onclick = () => {
+    selectedTaskId = null;
+    dialog.close();
+};
+dialog.addEventListener('click', event => {
+    if (event.target === dialog) dialog.close();
+});
+
+function showMessage(title, message) {
+    dialogTitle.textContent = title;
+    dialogStatus.textContent = '错误';
+    dialogStatus.className = 'status-badge status-failed';
+    dialogOutput.textContent = message;
+    dialogStop.hidden = true;
+    selectedTaskId = null;
+    if (!dialog.open) dialog.showModal();
+}
+
+function statusText(status) {
+    return ({ Running: '运行中', Completed: '已完成', Failed: '执行失败', Stopped: '已停止' })[status] || status;
+}
+
 function escapeHtml(value) {
-    return String(value).replace(/[&<>'"]/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[x]));
+    return String(value).replace(/[&<>'"]/g, x => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[x]);
 }
 
 loadCommands();

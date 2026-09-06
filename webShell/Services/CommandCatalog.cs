@@ -36,10 +36,11 @@ public sealed class CommandCatalog
                 var shell = lines[1].Trim();
                 var taskType = lines[2].Trim();
                 var script = string.Join(Environment.NewLine, lines.Skip(3));
+                var supportedTypes = new[] { "CMD", "PowerShell", "URL", "JavaScript" };
+
                 if (string.IsNullOrWhiteSpace(title)) throw new InvalidDataException("标题不能为空。");
-                if (!shell.Equals("CMD", StringComparison.OrdinalIgnoreCase) &&
-                    !shell.Equals("PowerShell", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Shell 类型必须是 CMD 或 PowerShell。");
+                if (!supportedTypes.Any(x => x.Equals(shell, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException("类型必须是 CMD、PowerShell、URL 或 JavaScript。");
                 if (!taskType.Equals("Short", StringComparison.OrdinalIgnoreCase) &&
                     !taskType.Equals("Long", StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("任务类型必须是 Short 或 Long。");
@@ -49,7 +50,7 @@ public sealed class CommandCatalog
                 {
                     Id = id,
                     Title = title,
-                    Shell = shell.Equals("CMD", StringComparison.OrdinalIgnoreCase) ? "CMD" : "PowerShell",
+                    Shell = supportedTypes.First(x => x.Equals(shell, StringComparison.OrdinalIgnoreCase)),
                     TaskType = taskType.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Short" : "Long",
                     Script = script,
                     WorkingDirectory = directory

@@ -23,7 +23,15 @@ namespace webShell.Pages
         {
             return new JsonResult(new
             {
-                commands = _catalog.Load(),
+                commands = _catalog.Load().Select(x => new
+                {
+                    x.Id,
+                    x.Title,
+                    Type = x.Shell,
+                    x.TaskType,
+                    x.Error,
+                    Script = x.IsFrontendCommand ? x.Script : null
+                }),
                 tasks = _tasks.GetAll()
             });
         }
@@ -31,9 +39,9 @@ namespace webShell.Pages
         public async Task<IActionResult> OnPostStartAsync([FromForm] string commandId)
         {
             var command = _catalog.Load().FirstOrDefault(x => x.Id == commandId);
-            if (command is null || command.Error is not null)
+            if (command is null || command.Error is not null || command.IsFrontendCommand)
             {
-                return BadRequest(new { error = command?.Error ?? "指令不存在。" });
+                return BadRequest(new { error = command?.Error ?? "该命令不是后端 Shell 命令。" });
             }
 
             return new JsonResult(await _tasks.StartAsync(command));

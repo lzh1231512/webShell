@@ -11,8 +11,13 @@ public sealed class ShellTaskService
     private const int MaximumCompletedTasks = 20;
     private readonly ConcurrentDictionary<string, TaskEntry> _tasks = new();
     private readonly ILogger<ShellTaskService> _logger;
+    private readonly IConfiguration _configuration;
 
-    public ShellTaskService(ILogger<ShellTaskService> logger) => _logger = logger;
+    public ShellTaskService(ILogger<ShellTaskService> logger, IConfiguration configuration)
+    {
+        _logger = logger;
+        _configuration = configuration;
+    }
 
     public async Task<TaskSnapshot> StartAsync(CommandDefinition command)
     {
@@ -51,7 +56,17 @@ public sealed class ShellTaskService
         var scriptPath = Path.Combine(Path.GetTempPath(), $"webshell-{entry.Id}{extension}");
         try
         {
-            await File.WriteAllTextAsync(scriptPath, entry.Command.Script, new UTF8Encoding(false));
+            var outputEncoding = GetOutputEncoding();
+            var codePage = outputEncoding.CodePage == Encoding.UTF8.CodePage ? "65001" : "936";
+            var script = entry.Command.Shell == "CMD"
+                ? $"@chcp {codePage} > nul{Environment.NewLine}{entry.Command.Script}"
+                : $"[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding({outputEncoding.CodePage}){Environment.NewLine}" +
+                  $"$OutputEncoding = [System.Text.Encoding]::GetEncoding({outputEncoding.CodePage})" + Environment.NewLine +
+                  entry.Command.Script;
+            var scriptEncoding = entry.Command.Shell == "CMD"
+                ? outputEncoding
+                : new UTF8Encoding(true);
+            await File.WriteAllTextAsync(scriptPath, script, scriptEncoding);
             var startInfo = new ProcessStartInfo
             {
                 FileName = entry.Command.Shell == "CMD" ? "cmd.exe" : "powershell.exe",
@@ -60,8 +75,8 @@ public sealed class ShellTaskService
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
+                StandardOutputEncoding = outputEncoding,
+                StandardErrorEncoding = outputEncoding
             };
             if (entry.Command.Shell == "CMD")
             {
@@ -69,6 +84,7 @@ public sealed class ShellTaskService
                 startInfo.ArgumentList.Add("/c");
                 startInfo.ArgumentList.Add(scriptPath);
             }
+
             else
             {
                 startInfo.ArgumentList.Add("-NoProfile");
@@ -107,6 +123,13 @@ public sealed class ShellTaskService
             try { if (File.Exists(scriptPath)) File.Delete(scriptPath); } catch { }
             TrimCompletedTasks();
         }
+    }
+
+    private Encoding GetOutputEncoding()
+    {
+        return _configuration["Shell:OutputEncoding"]?.Equals("UTF8", StringComparison.OrdinalIgnoreCase) == true
+            ? new UTF8Encoding(false)
+            : Encoding.GetEncoding(936);
     }
 
     private void AddOutput(TaskEntry entry, string? text, bool isError)

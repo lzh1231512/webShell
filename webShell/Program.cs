@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using System.Text;
 using webShell.Services;
 
 namespace webShell
@@ -8,6 +9,7 @@ namespace webShell
     {
         public static void Main(string[] args)
         {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             var builder = WebApplication.CreateBuilder(args);
 
             builder.Logging.AddLog4Net("log4net.config");

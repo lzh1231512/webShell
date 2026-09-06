@@ -8,5 +8,6 @@ public sealed class CommandDefinition
     public required string TaskType { get; init; }
     public required string Script { get; init; }
     public required string WorkingDirectory { get; init; }
+    public bool IsFrontendCommand => Shell is "URL" or "JavaScript";
     public string? Error { get; init; }
 }
