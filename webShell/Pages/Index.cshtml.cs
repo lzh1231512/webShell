@@ -41,7 +41,7 @@ namespace webShell.Pages
             var command = _catalog.Load().FirstOrDefault(x => x.Id == commandId);
             if (command is null || command.Error is not null || command.IsFrontendCommand)
             {
-                return BadRequest(new { error = command?.Error ?? "¸ÃÃüÁî²»ÊÇºó¶Ë Shell ÃüÁî¡£" });
+                return BadRequest(new { error = command?.Error ?? "ï¿½ï¿½ï¿½ï¿½ï¿½î²»ï¿½Çºï¿½ï¿½ Shell ï¿½ï¿½ï¿½î¡£" });
             }
 
             return new JsonResult(await _tasks.StartAsync(command));
@@ -50,6 +50,17 @@ namespace webShell.Pages
         public IActionResult OnPostStop([FromForm] string taskId)
         {
             return _tasks.Stop(taskId) ? new JsonResult(new { success = true }) : NotFound();
+        }
+
+        public async Task<IActionResult> OnPostRestartAsync([FromForm] string commandId)
+        {
+            var command = _catalog.Load().FirstOrDefault(x => x.Id == commandId);
+            if (command is null || command.Error is not null || command.IsFrontendCommand || command.TaskType != "Service")
+            {
+                return BadRequest(new { error = command?.Error ?? "Only Service commands can be restarted." });
+            }
+
+            return new JsonResult(await _tasks.RestartAsync(command));
         }
 
         public IActionResult OnGetState()

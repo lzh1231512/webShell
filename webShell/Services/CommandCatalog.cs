@@ -30,7 +30,7 @@ public sealed class CommandCatalog
                 var scriptFile = new UTF8Encoding(false, true).GetString(bytes);
                 var lines = scriptFile.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
                 if (lines.Length < 4)
-                    throw new InvalidDataException("ÎÄ¼þÖÁÉÙÐèÒªÈýÐÐÔªÊý¾ÝºÍÒ»ÐÐ½Å±¾ÄÚÈÝ¡£");
+                    throw new InvalidDataException("æ–‡ä»¶è‡³å°‘éœ€è¦ä¸‰è¡Œå…ƒæ•°æ®å’Œä¸€è¡Œè„šæœ¬å†…å®¹ã€‚");
 
                 var title = lines[0].Trim();
                 var shell = lines[1].Trim();
@@ -38,20 +38,27 @@ public sealed class CommandCatalog
                 var script = string.Join(Environment.NewLine, lines.Skip(3));
                 var supportedTypes = new[] { "CMD", "PowerShell", "URL", "JavaScript" };
 
-                if (string.IsNullOrWhiteSpace(title)) throw new InvalidDataException("±êÌâ²»ÄÜÎª¿Õ¡£");
+                if (string.IsNullOrWhiteSpace(title)) throw new InvalidDataException("æ ‡é¢˜ä¸èƒ½ä¸ºç©ºã€‚");
                 if (!supportedTypes.Any(x => x.Equals(shell, StringComparison.OrdinalIgnoreCase)))
-                    throw new InvalidDataException("ÀàÐÍ±ØÐëÊÇ CMD¡¢PowerShell¡¢URL »ò JavaScript¡£");
+                    throw new InvalidDataException("ç±»åž‹å¿…é¡»æ˜¯ CMDã€PowerShellã€URL æˆ– JavaScriptã€‚");
                 if (!taskType.Equals("Short", StringComparison.OrdinalIgnoreCase) &&
-                    !taskType.Equals("Long", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("ÈÎÎñÀàÐÍ±ØÐëÊÇ Short »ò Long¡£");
-                if (string.IsNullOrWhiteSpace(script)) throw new InvalidDataException("½Å±¾ÄÚÈÝÎª¿Õ¡£");
+                    !taskType.Equals("Long", StringComparison.OrdinalIgnoreCase) &&
+                    !taskType.Equals("Service", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Task type must be Short, Long, or Service.");
+                if (taskType.Equals("Service", StringComparison.OrdinalIgnoreCase) &&
+                    (shell.Equals("URL", StringComparison.OrdinalIgnoreCase) ||
+                     shell.Equals("JavaScript", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException("Service commands must use CMD or PowerShell.");
+                if (string.IsNullOrWhiteSpace(script)) throw new InvalidDataException("è„šæœ¬å†…å®¹ä¸ºç©ºã€‚");
 
                 commands.Add(new CommandDefinition
                 {
                     Id = id,
                     Title = title,
                     Shell = supportedTypes.First(x => x.Equals(shell, StringComparison.OrdinalIgnoreCase)),
-                    TaskType = taskType.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Short" : "Long",
+                    TaskType = taskType.Equals("Short", StringComparison.OrdinalIgnoreCase)
+                        ? "Short"
+                        : taskType.Equals("Service", StringComparison.OrdinalIgnoreCase) ? "Service" : "Long",
                     Script = script,
                     WorkingDirectory = directory
                 });

@@ -93,6 +93,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status-completed { background: #dcfce7; color: #15803d; }
 .status-failed { background: #fee2e2; color: #b91c1c; }
 .status-stopped { background: #e2e8f0; color: #475569; }
+.status-unknown { background: #fef3c7; color: #a16207; }
 .config-error { color: #b91c1c; font-size: .85rem; margin: .35rem .25rem; }
 .empty-state { color: #64748b; text-align: center; }
 

@@ -1,0 +1,12 @@
+[
+  {
+    "ServiceId": "ws-scrcpy-service",
+    "CommandId": "ws-scrcpy-service",
+    "Status": "Failed",
+    "ProcessId": 18096,
+    "ProcessStartTimeUtc": "2026-09-18T14:04:01.4828939Z",
+    "ProcessName": "powershell",
+    "StartedAtUtc": "2026-09-18T14:03:23.7669224Z",
+    "FinishedAtUtc": "2026-09-18T14:04:05.0847802Z"
+  }
+]

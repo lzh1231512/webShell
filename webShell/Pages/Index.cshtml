@@ -49,6 +49,7 @@ const endpoints = {
     commands: '@Url.Page("/Index", pageHandler: "Commands")',
     state: '@Url.Page("/Index", pageHandler: "State")',
     start: '@Url.Page("/Index", pageHandler: "Start")',
+    restart: '@Url.Page("/Index", pageHandler: "Restart")',
     stop: '@Url.Page("/Index", pageHandler: "Stop")'
 };
 const commandsElement = document.getElementById('commands');
@@ -160,6 +161,20 @@ async function stopTask(id) {
     await loadState();
 }
 
+async function restartService(commandId) {
+    const body = new URLSearchParams({ commandId });
+    if (token) body.append('__RequestVerificationToken', token);
+    const response = await fetch(endpoints.restart, { method: 'POST', body, credentials: 'same-origin' });
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: '重启服务失败。' }));
+        showMessage('重启失败', error.error || '重启服务失败。');
+        return;
+    }
+    const task = await response.json();
+    renderTasks([task, ...currentTasks.filter(x => x.id !== task.id)]);
+    openTask(task);
+}
+
 function renderTasks(items) {
     currentTasks = items;
     const running = items.filter(x => x.status === 'Running');
@@ -182,17 +197,35 @@ function renderTasks(items) {
         info.innerHTML = `<strong>${escapeHtml(item.title)}</strong><span class="status-badge status-${item.status.toLowerCase()}">${statusText(item.status)}</span>`;
         const actions = document.createElement('div');
         actions.className = 'task-actions';
+        const isService = item.taskType === 'Service';
         const view = document.createElement('button');
         view.className = 'secondary-button';
-        view.textContent = '查看结果';
+        view.textContent = isService ? '查看状态' : '查看结果';
         view.onclick = () => openTask(item);
         actions.appendChild(view);
+        if (isService && item.status !== 'Running') {
+            const start = document.createElement('button');
+            start.className = 'secondary-button';
+            start.textContent = '启动服务';
+            start.onclick = () => {
+                const command = currentCommands.find(x => x.id === item.commandId);
+                if (command) runCommand(command, start);
+            };
+            actions.appendChild(start);
+        }
         if (item.status === 'Running') {
             const stop = document.createElement('button');
             stop.className = 'danger-button';
-            stop.textContent = '停止';
+            stop.textContent = isService ? '停止服务' : '停止';
             stop.onclick = () => stopTask(item.id);
             actions.appendChild(stop);
+            if (isService) {
+                const restart = document.createElement('button');
+                restart.className = 'secondary-button';
+                restart.textContent = '重启服务';
+                restart.onclick = () => restartService(item.commandId);
+                actions.appendChild(restart);
+            }
         }
         card.append(info, actions);
         tasksElement.appendChild(card);
@@ -216,6 +249,7 @@ function updateDialog(task) {
     dialogStatus.className = `status-badge status-${task.status.toLowerCase()}`;
     dialogOutput.textContent = task.output.map(x => x.text).join('\n');
     dialogStop.hidden = task.status !== 'Running';
+    dialogStop.textContent = task.taskType === 'Service' ? '停止服务' : '停止任务';
     dialogStop.onclick = () => stopTask(task.id);
 }
 
@@ -238,7 +272,7 @@ function showMessage(title, message) {
 }
 
 function statusText(status) {
-    return ({ Running: '运行中', Completed: '已完成', Failed: '执行失败', Stopped: '已停止' })[status] || status;
+    return ({ Running: '运行中', Completed: '已完成', Failed: '执行失败', Stopped: '已停止', Unknown: '状态未知' })[status] || status;
 }
 
 function escapeHtml(value) {
