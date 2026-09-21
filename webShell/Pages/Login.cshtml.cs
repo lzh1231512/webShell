@@ -33,7 +33,7 @@ public class LoginModel : PageModel
             return RedirectToPage("/Index");
         }
 
-        Error = "ÃÜÂë´íÎó¡£";
+        Error = "å¯†ç é”™è¯¯ã€‚";
         return Page();
     }
 

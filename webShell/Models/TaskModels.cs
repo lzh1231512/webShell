@@ -28,6 +28,8 @@ public sealed class PersistedServiceState
     public int? ProcessId { get; set; }
     public DateTime? ProcessStartTimeUtc { get; set; }
     public string? ProcessName { get; set; }
+    public string? ProcessCommandLine { get; set; }
+    public int? Port { get; set; }
     public DateTime StartedAtUtc { get; set; }
     public DateTime? FinishedAtUtc { get; set; }
 }

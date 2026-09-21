@@ -30,12 +30,43 @@ public sealed class CommandCatalog
                 var scriptFile = new UTF8Encoding(false, true).GetString(bytes);
                 var lines = scriptFile.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
                 if (lines.Length < 4)
-                    throw new InvalidDataException("文件至少需要三行元数据和一行脚本内容。");
+                    throw new InvalidDataException("文件至少需要三个元数据和一行脚本内容。");
 
                 var title = lines[0].Trim();
                 var shell = lines[1].Trim();
                 var taskType = lines[2].Trim();
-                var script = string.Join(Environment.NewLine, lines.Skip(3));
+                var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var scriptStart = 3;
+                if (scriptStart < lines.Length &&
+                    lines[scriptStart].Trim().Equals("[Metadata]", StringComparison.OrdinalIgnoreCase))
+                {
+                    scriptStart++;
+                    var metadataClosed = false;
+                    for (; scriptStart < lines.Length; scriptStart++)
+                    {
+                        var metadataLine = lines[scriptStart].Trim();
+                        if (metadataLine.Equals("[/Metadata]", StringComparison.OrdinalIgnoreCase))
+                        {
+                            metadataClosed = true;
+                            scriptStart++;
+                            break;
+                        }
+                        if (string.IsNullOrWhiteSpace(metadataLine)) continue;
+
+                        var separator = metadataLine.IndexOf('=');
+                        if (separator <= 0)
+                            throw new InvalidDataException("元数据项必须使用 Key=Value 格式。");
+                        var key = metadataLine[..separator].Trim();
+                        var value = metadataLine[(separator + 1)..].Trim();
+                        if (!metadata.TryAdd(key, value))
+                            throw new InvalidDataException($"元数据键重复：{key}。");
+                    }
+
+                    if (!metadataClosed)
+                        throw new InvalidDataException("元数据区块缺少 [/Metadata] 结束标记。");
+                }
+
+                var script = string.Join(Environment.NewLine, lines.Skip(scriptStart));
                 var supportedTypes = new[] { "CMD", "PowerShell", "URL", "JavaScript" };
 
                 if (string.IsNullOrWhiteSpace(title)) throw new InvalidDataException("标题不能为空。");
@@ -49,7 +80,7 @@ public sealed class CommandCatalog
                     (shell.Equals("URL", StringComparison.OrdinalIgnoreCase) ||
                      shell.Equals("JavaScript", StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidDataException("Service commands must use CMD or PowerShell.");
-                if (string.IsNullOrWhiteSpace(script)) throw new InvalidDataException("脚本内容为空。");
+                if (string.IsNullOrWhiteSpace(script)) throw new InvalidDataException("脚本不能为空。");
 
                 commands.Add(new CommandDefinition
                 {
@@ -60,7 +91,8 @@ public sealed class CommandCatalog
                         ? "Short"
                         : taskType.Equals("Service", StringComparison.OrdinalIgnoreCase) ? "Service" : "Long",
                     Script = script,
-                    WorkingDirectory = directory
+                    WorkingDirectory = directory,
+                    Metadata = metadata
                 });
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DecoderFallbackException or InvalidDataException)

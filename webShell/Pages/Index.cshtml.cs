@@ -41,7 +41,7 @@ namespace webShell.Pages
             var command = _catalog.Load().FirstOrDefault(x => x.Id == commandId);
             if (command is null || command.Error is not null || command.IsFrontendCommand)
             {
-                return BadRequest(new { error = command?.Error ?? "������Ǻ�� Shell ���" });
+                return BadRequest(new { error = command?.Error ?? "找不到指定的 Shell 命令。" });
             }
 
             return new JsonResult(await _tasks.StartAsync(command));
@@ -57,7 +57,7 @@ namespace webShell.Pages
             var command = _catalog.Load().FirstOrDefault(x => x.Id == commandId);
             if (command is null || command.Error is not null || command.IsFrontendCommand || command.TaskType != "Service")
             {
-                return BadRequest(new { error = command?.Error ?? "Only Service commands can be restarted." });
+                return BadRequest(new { error = command?.Error ?? "只有 Service 类型的命令可以重启。" });
             }
 
             return new JsonResult(await _tasks.RestartAsync(command));

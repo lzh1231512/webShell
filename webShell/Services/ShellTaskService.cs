@@ -115,14 +115,18 @@ public sealed class ShellTaskService
             var taskId = GetServiceTaskId(command);
             if (_tasks.TryGetValue(taskId, out entry!))
             {
-                RefreshServiceState(entry);
+                RefreshServiceState(entry, discoverStopped: true);
                 if (entry.Status == "Running") return entry.Snapshot;
                 entry.Command = command;
+                entry.ServicePort = GetServicePort(command);
                 entry.ResetForStart();
             }
             else
             {
-                entry = new TaskEntry(taskId, command);
+                entry = new TaskEntry(taskId, command)
+                {
+                    ServicePort = GetServicePort(command)
+                };
                 _tasks[taskId] = entry;
             }
 
@@ -182,6 +186,7 @@ public sealed class ShellTaskService
             entry.Process = process;
             entry.ProcessId = process.Id;
             entry.ProcessName = process.ProcessName;
+            entry.ProcessCommandLine = BuildProcessCommandLine(startInfo);
             entry.ProcessStartTimeUtc = GetProcessStartTimeUtc(process);
             if (entry.IsService) PersistService(entry);
             entry.Started.TrySetResult(true);
@@ -219,47 +224,65 @@ public sealed class ShellTaskService
         var commands = _catalog.Load()
             .Where(x => IsService(x) && x.Error is null)
             .ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
-        var changed = false;
-        foreach (var state in _serviceStates.Values.ToList())
+        foreach (var command in commands.Values)
         {
-            if (!commands.TryGetValue(state.CommandId, out var command)) continue;
+            _serviceStates.TryGetValue(command.Id, out var state);
             var entry = new TaskEntry(GetServiceTaskId(command), command)
             {
-                Status = state.Status,
-                ProcessId = state.ProcessId,
-                ProcessStartTimeUtc = state.ProcessStartTimeUtc,
-                ProcessName = state.ProcessName,
-                StartedAt = state.StartedAtUtc,
-                FinishedAt = state.FinishedAtUtc
+                Status = state?.Status ?? "Stopped",
+                ProcessId = state?.ProcessId,
+                ProcessStartTimeUtc = state?.ProcessStartTimeUtc,
+                ProcessName = state?.ProcessName,
+                ProcessCommandLine = state?.ProcessCommandLine,
+                ServicePort = GetServicePort(command),
+                StartedAt = state?.StartedAtUtc ?? DateTime.UtcNow,
+                FinishedAt = state?.FinishedAtUtc
             };
-            if (entry.Status == "Running" && !IsTrackedProcessAlive(entry))
+
+            if (IsTrackedProcessAlive(entry))
+            {
+                var stateChanged = entry.Status != "Running" || state?.ProcessId != entry.ProcessId;
+                entry.Status = "Running";
+                entry.FinishedAt = null;
+                if (stateChanged) PersistService(entry);
+            }
+            else if (entry.Status == "Running")
             {
                 entry.Status = "Failed";
                 entry.FinishedAt = DateTime.UtcNow;
-                state.Status = entry.Status;
-                state.FinishedAtUtc = entry.FinishedAt;
-                changed = true;
+                PersistService(entry);
             }
             _tasks[entry.Id] = entry;
         }
-
-        if (changed) SaveServiceStates();
     }
 
     private void RefreshServiceStates()
     {
-        foreach (var entry in _tasks.Values.Where(x => x.IsService && x.Status == "Running"))
+        foreach (var entry in _tasks.Values.Where(x => x.IsService && x.Status != "Stopped"))
         {
             RefreshServiceState(entry);
         }
     }
 
-    private void RefreshServiceState(TaskEntry entry)
+    private void RefreshServiceState(TaskEntry entry, bool discoverStopped = false)
     {
-        if (entry.Status != "Running" || IsTrackedProcessAlive(entry)) return;
-        entry.Status = "Failed";
-        entry.FinishedAt = DateTime.UtcNow;
-        PersistService(entry);
+        if (entry.Status == "Stopped" && !discoverStopped) return;
+        if (IsTrackedProcessAlive(entry))
+        {
+            if (entry.Status != "Running")
+            {
+                entry.Status = "Running";
+                entry.FinishedAt = null;
+                PersistService(entry);
+            }
+            return;
+        }
+        if (entry.Status == "Running")
+        {
+            entry.Status = "Failed";
+            entry.FinishedAt = DateTime.UtcNow;
+            PersistService(entry);
+        }
     }
 
     private void LoadServiceStates()
@@ -290,6 +313,8 @@ public sealed class ShellTaskService
                 ProcessId = entry.ProcessId,
                 ProcessStartTimeUtc = entry.ProcessStartTimeUtc,
                 ProcessName = entry.ProcessName,
+                ProcessCommandLine = entry.ProcessCommandLine,
+                Port = entry.ServicePort,
                 StartedAtUtc = entry.StartedAt,
                 FinishedAtUtc = entry.FinishedAt
             };
@@ -333,26 +358,26 @@ public sealed class ShellTaskService
     {
         disposeProcess = false;
         if (entry.Process is { HasExited: false } process) return process;
-        if (entry.ProcessId is not int processId) return null;
-        try
+        if (entry.ProcessId is int processId)
         {
-            var candidate = Process.GetProcessById(processId);
-            if (candidate.HasExited || !MatchesProcess(entry, candidate))
+            try
             {
+                var candidate = Process.GetProcessById(processId);
+                if (!candidate.HasExited && MatchesProcess(entry, candidate))
+                {
+                    disposeProcess = true;
+                    return candidate;
+                }
                 candidate.Dispose();
-                return null;
             }
-            disposeProcess = true;
-            return candidate;
+            catch (ArgumentException) { }
+            catch (InvalidOperationException) { }
         }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
+
+        if (entry.IsService && TryRecoverServiceProcess(entry))
+            return GetTrackedProcess(entry, out disposeProcess);
+
+        return null;
     }
 
     private bool IsTrackedProcessAlive(TaskEntry entry)
@@ -390,7 +415,117 @@ public sealed class ShellTaskService
         catch (System.ComponentModel.Win32Exception) { return null; }
     }
 
-    private static string GetServiceTaskId(CommandDefinition command) => $"service__{command.Id}";
+    private static string GetServiceTaskId(CommandDefinition command) => $"service:{command.Id}";
+
+    private bool TryRecoverServiceProcess(TaskEntry entry)
+    {
+        var identity = FindServiceProcess(entry.Command, entry.ServicePort);
+        if (identity is null) return false;
+        try
+        {
+            using var process = Process.GetProcessById(identity.ProcessId);
+            if (process.HasExited) return false;
+            entry.ProcessId = process.Id;
+            entry.ProcessName = process.ProcessName;
+            entry.ProcessCommandLine = identity.CommandLine;
+            entry.ProcessStartTimeUtc = GetProcessStartTimeUtc(process);
+            entry.ServicePort ??= GetServicePort(entry.Command);
+            PersistService(entry);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private ProcessIdentity? FindServiceProcess(CommandDefinition command, int? port)
+    {
+        var snapshot = ReadWindowsProcessSnapshot(port);
+        if (snapshot is null) return null;
+
+        var expectedName = GetMetadata(command, "ProcessName");
+        var commandLineHint = GetMetadata(command, "CommandLineContains");
+        if (port is null && string.IsNullOrWhiteSpace(expectedName) && string.IsNullOrWhiteSpace(commandLineHint))
+            return null;
+
+        var candidates = snapshot.Processes
+            .Where(x => x.ProcessId > 0)
+            .Where(x => MatchesServiceSignature(x, expectedName, commandLineHint))
+            .ToList();
+        var portOwners = snapshot.PortOwners.ToHashSet();
+        return candidates.FirstOrDefault(x => portOwners.Contains(x.ProcessId))
+            ?? candidates.FirstOrDefault();
+    }
+
+    private static bool MatchesServiceSignature(
+        ProcessIdentity process,
+        string? expectedName,
+        string? commandLineHint)
+    {
+        if (!string.IsNullOrWhiteSpace(expectedName) &&
+            !NormalizeProcessName(process.Name).Equals(NormalizeProcessName(expectedName), StringComparison.OrdinalIgnoreCase))
+            return false;
+        return string.IsNullOrWhiteSpace(commandLineHint) ||
+            process.CommandLine?.Contains(commandLineHint, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private WindowsProcessSnapshot? ReadWindowsProcessSnapshot(int? port)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var portValue = port.GetValueOrDefault();
+        var script = $"$owners = @(); if ({portValue} -gt 0) {{ try {{ $owners = @(Get-NetTCPConnection -State Listen -LocalPort {portValue} -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique) }} catch {{ $owners = @() }} }}; $processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine); [pscustomobject]@{{ PortOwners = $owners; Processes = $processes }} | ConvertTo-Json -Compress -Depth 4";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(script);
+
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process is null) return null;
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(5000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+            return JsonSerializer.Deserialize<WindowsProcessSnapshot>(output);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or JsonException)
+        {
+            _logger.LogDebug(ex, "Unable to inspect Windows service processes.");
+            return null;
+        }
+    }
+
+    private int? GetServicePort(CommandDefinition command)
+    {
+        var value = GetMetadata(command, "Port");
+        return int.TryParse(value, out var port) && port is > 0 and <= 65535 ? port : null;
+    }
+
+    private static string? GetMetadata(CommandDefinition command, string key) =>
+        command.Metadata.TryGetValue(key, out var value) ? value : null;
+
+    private static string NormalizeProcessName(string? name) =>
+        Path.GetFileNameWithoutExtension(name ?? string.Empty);
+
+    private static string BuildProcessCommandLine(ProcessStartInfo startInfo) =>
+        string.Join(" ", new[] { startInfo.FileName }.Concat(startInfo.ArgumentList));
 
     private static bool IsService(CommandDefinition command) =>
         command.TaskType.Equals("Service", StringComparison.OrdinalIgnoreCase);
@@ -434,6 +569,8 @@ public sealed class ShellTaskService
         public int? ProcessId { get; set; }
         public DateTime? ProcessStartTimeUtc { get; set; }
         public string? ProcessName { get; set; }
+        public string? ProcessCommandLine { get; set; }
+        public int? ServicePort { get; set; }
         public Task? RunTask { get; set; }
         public TaskCompletionSource<bool> Started { get; private set; } = CreateStartedSource();
         public Queue<TaskOutputLine> Output { get; } = new();
@@ -451,6 +588,7 @@ public sealed class ShellTaskService
             ProcessId = null;
             ProcessStartTimeUtc = null;
             ProcessName = null;
+            ProcessCommandLine = null;
             lock (Output) Output.Clear();
         }
 
@@ -479,5 +617,18 @@ public sealed class ShellTaskService
 
         private static TaskCompletionSource<bool> CreateStartedSource() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class WindowsProcessSnapshot
+    {
+        public List<int> PortOwners { get; set; } = new();
+        public List<ProcessIdentity> Processes { get; set; } = new();
+    }
+
+    private sealed class ProcessIdentity
+    {
+        public int ProcessId { get; set; }
+        public string? Name { get; set; }
+        public string? CommandLine { get; set; }
     }
 }
